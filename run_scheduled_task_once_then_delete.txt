@@ -1,0 +1,65 @@
+Testing what the process looks like...
+
+# MrNetTek
+# eddiejackson.net/blog
+# 5/28/2020
+# free for public use
+# free to claim as your own
+ 
+Clear-Host
+ 
+# SCRIPT NAME
+$script = "c:\YourScript\script.cmd"
+ 
+# CREATE SCHEDULED TASK
+schtasks.exe /CREATE /F /TN "RunScriptOnce" /RU SYSTEM /SC ONSTART /TR "$script"
+Start-Sleep -s 10
+ 
+# TEST THE TASK
+schtasks.exe /RUN /TN "RunScriptOnce"
+Start-Sleep -s 10
+ 
+# DELETE TASK
+# this step would be the last step in the script.cmd
+schtasks.exe /DELETE /F /TN "RunScriptOnce"
+ 
+
+To turn this into a production ready process:
+
+ 
+
+Step 1
+
+Create the batch file
+
+c:\YourScript\script.cmd
+
+@echo off
+:: add your code
+echo do some stuff here > c:\YourScript\TheScriptRan.txt
+schtasks.exe /DELETE /F /TN "RunScriptOnce"
+exit /b 0
+
+
+Step 2
+
+Create the scheduled task
+
+$script = "c:\YourScript\script.cmd"
+schtasks.exe /CREATE /F /TN "RunScriptOnce" /RU SYSTEM /SC ONSTART /TR "$script"
+
+
+Step 3
+
+Restart computer
+
+
+Step 4
+
+Verify the script ran and the task was deleted
+
+ 
+
+Notes
+
+Something that is pretty cool, this process survives sysprep --- meaning, you could have a scheduled task run upon first login, perform some action items in the SYSTEM security context, and then delete itself; also works on cloud images.
