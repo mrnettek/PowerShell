@@ -1,0 +1,300 @@
+I created a log out script for AWS users. If they are idle for at least 60 minutes, a 15 minute countdown window comes up. I added this as a scheduled task to control when the form appears.
+
+ 
+If the user clicks the button, it closes the form, and does not log off the user.
+
+A few clever bits:
+
+I generate the form icon from a base64 string
+I verify the idle time using a Win32 API
+I hide the PowerShell window in the scheduled task
+ 
+
+Code
+
+# MrNetTek
+# eddiejackson.net/blog
+# 5/19/2020
+# free for public use
+# free to claim as your own
+ 
+# BEGIN IDLE CHECK
+# Idle Input Win32 API
+Add-Type @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+ 
+namespace PInvoke.Win32 {
+ 
+    public static class UserInput {
+ 
+        [DllImport("user32.dll", SetLastError=false)]
+        private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+ 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LASTINPUTINFO {
+            public uint cbSize;
+            public int dwTime;
+        }
+ 
+        public static DateTime LastInput {
+            get {
+                DateTime bootTime = DateTime.UtcNow.AddMilliseconds(-Environment.TickCount);
+                DateTime lastInput = bootTime.AddMilliseconds(LastInputTicks);
+                return lastInput;
+            }
+        }
+ 
+        public static TimeSpan IdleTime {
+            get {
+                return DateTime.UtcNow.Subtract(LastInput);
+            }
+        }
+ 
+        public static int LastInputTicks {
+            get {
+                LASTINPUTINFO lii = new LASTINPUTINFO();
+                lii.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+                GetLastInputInfo(ref lii);
+                return lii.dwTime;
+            }
+        }
+    }
+}
+'@
+ 
+# Instantiate object
+$Idle = [PInvoke.Win32.UserInput]::IdleTime
+ 
+# Verify Idle Input
+# Must be at least 1 hour to run main function
+# Add your own specified hours/minutes here
+if ($Idle.Hours -gt 0) {
+    # continue to run function
+    clear-host   
+    write-host "Idle time is at least 1 hour"  
+}
+else
+{
+    # main function will not run
+    clear-host
+    write-host "Idle time is less than 1 hour"
+    write-host "Exiting..."  
+ 
+    $ProcessID = [System.Diagnostics.Process]::GetCurrentProcess()
+    $ProcessID = $ProcessID.ID    
+    #Add-Type -AssemblyName PresentationFramework
+    #[System.Windows.MessageBox]::Show('do not run function')
+    & taskkill /PID $ProcessID /t /f
+}
+# END IDLE CHECK
+ 
+ 
+# LOAD MAIN FUNCTION
+ 
+function Kill-Session {
+ 
+    $ErrorActionPreference= 'silentlycontinue'   
+ 
+    # play alert sound
+    $sound = new-Object System.Media.SoundPlayer;
+    $sound.SoundLocation="c:\WINDOWS\Media\notify.wav";
+    $sound.PlayLooping();
+    $flag=$false;
+ 
+    1..10 | foreach {
+        if($_ -gt 1){$flag=$true} else{sleep -s 1}
+        if($flag) {$sound.Stop() }
+    }
+ 
+ 
+    # load assemblies
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.Forms.Application]::EnableVisualStyles()     
+     
+    # instantiate objects
+    $form = New-Object 'System.Windows.Forms.Form'
+    $label1 = New-Object System.Windows.Forms.Label
+    $label2 = New-Object System.Windows.Forms.Label
+    $textbox = New-Object 'System.Windows.Forms.TextBox'
+    $buttonStillWorking = New-Object 'System.Windows.Forms.Button' 
+    $timer = New-Object 'System.Windows.Forms.Timer'
+    $InitialFormWindowState = New-Object 'System.Windows.Forms.FormWindowState'
+ 
+    $cadence=[timespan]'0:0:0:1'
+    $ticker={
+        $script:ts1=$ts1.Subtract($cadence)
+        $textbox.Text = $ts1.ToString('hh\:mm\:ss')
+        if($ts1.Ticks -le 0){
+            $timer.Stop()
+            #force log off              
+            (Get-WmiObject -Class Win32_OperatingSystem).Win32Shutdown(4) 
+            #[System.Windows.MessageBox]::Show('kill session')
+            $ProcessID = [System.Diagnostics.Process]::GetCurrentProcess()
+            $ProcessID = $ProcessID.ID
+            & taskkill /PID $ProcessID /t /f
+        }
+    }
+     
+    $Form_StateCorrection_Load=
+    {       
+        $form.WindowState = $InitialFormWindowState
+    }
+     
+    $Form_Cleanup_FormClosed=
+    {       
+        try
+        {
+            $form.remove_Load($form_Load)
+            $timer.remove_Tick($ticker)
+            $form.remove_Load($Form_StateCorrection_Load)
+            $form.remove_FormClosed($Form_Cleanup_FormClosed)
+        }
+        catch { Out-Null }
+    }
+ 
+    $form.SuspendLayout()
+     
+     
+    # MAIN FORM     
+    $form.Icon = 'c:\powershell\icon.ico'
+    $form.Controls.Add($textbox)
+    $form.Controls.Add($buttonStillWorking)
+    $form.Controls.Add($label1)
+    $form.Controls.Add($label2)    
+    $form.AcceptButton = $buttonStillWorking
+    $form.AutoScaleDimensions = '8, 17'
+    $form.AutoScaleMode = 'Font'
+    $form.ClientSize = '616, 362'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.Margin = '5, 5, 5, 5'
+    $form.MaximizeBox = $False
+    $form.MinimizeBox = $False
+    $form.Name = 'form1'
+    $form.ShortcutsEnabled = $False
+    $form.StartPosition = 'CenterScreen'
+    $form.Text = 'Log Out v1.0'
+    $form.TopMost = $True # force window to stay on top
+    $form.add_Load($form_Load)      
+     
+    # LABEL1
+    $label1.Location = New-Object System.Drawing.Point(100,50)
+    $label1.Font = 'Calibri, 13.25pt'
+    $label1.Size = New-Object System.Drawing.Size(550,80)
+    $label1.Text = 'Your AWS session has been idle for 60 min.'    
+     
+     
+    # LABEL2        
+    $label2.Location = New-Object System.Drawing.Point(195,130)
+    $label2.Font = 'Calibri, 13.25pt'
+    $label2.Size = New-Object System.Drawing.Size(450,80)
+    $label2.Text = 'Logging Session Out In...'    
+ 
+     
+    # TEXTBOX
+    $textbox.Font = 'Calibri, 14.25pt, style=Bold'
+    $textbox.Location = '264, 180'
+    $textbox.Margin = '5, 5, 5, 5'
+    $textbox.BorderStyle = "None"
+    $textbox.Name = 'textbox'
+    $textbox.Size = '100, 34'
+    $textbox.ReadOnly = $True
+    $textbox.TabIndex = 2   
+     
+    # BUTTONSTILLWORKING
+    $buttonStillWorking.Font = 'Calibri, 12.25pt'
+    $buttonStillWorking.DialogResult = 'OK'
+    $buttonStillWorking.Location = '210, 265'
+    $buttonStillWorking.Margin = '5, 5, 5, 5'
+    $buttonStillWorking.Name = 'buttonOK'
+    $buttonStillWorking.Size = '200, 50'
+    $buttonStillWorking.BackColor ="LightGray"
+    $buttonStillWorking.ForeColor ="black"
+    $buttonStillWorking.Text = '&I''m still working'
+    $buttonStillWorking.UseCompatibleTextRendering = $True
+    $buttonStillWorking.UseVisualStyleBackColor = $False
+    $buttonStillWorking.TabIndex = 0    
+     
+    # TIMER
+    $timer.Interval = 1000
+    $timer.add_Tick($ticker)
+    $form.ResumeLayout()
+     
+    # FORM CONFIG
+    $InitialFormWindowState = $form.WindowState
+    $form.add_Load($Form_StateCorrection_Load)    
+    $form.add_FormClosed($Form_Cleanup_FormClosed) 
+    $this.Enabled=$false 
+     
+    # SET TIMER FOR 15 MINUTES
+    $script:ts1 = [timespan]'0:0:15:00'    
+     
+    # START TIMER   
+    $timer.Start()
+     
+    # FOCUS THIS PROCESS
+    $WindowState = '[DllImport("user32.dll")] public static extern bool ShowWindow(int handle, int state);'
+    add-type -name win -member $WindowState -namespace native
+    [native.win]::ShowWindow(([System.Diagnostics.Process]::GetCurrentProcess() | Get-Process).MainWindowHandle, 0)    
+    SetForegroundWindow(this.Handle)
+     
+    # SHOW FORM
+    $form.ShowDialog()
+} 
+ 
+# LOAD ICON FUNCTION
+# Create the form icon
+function Generate-Icon {
+ 
+    # icon stored as base64
+    $Base64String = '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'
+     
+    # icon path and name
+    $Image = 'c:\powershell\icon.ico'
+     
+    # convert base64 to bytes
+    [byte[]]$Bytes = [convert]::FromBase64String($Base64String)
+     
+    # create icon from bytes
+    [System.IO.File]::WriteAllBytes($Image,$Bytes)
+ 
+}
+ 
+# FORM ICON
+# Check if form icon does not exist
+if (!(Test-Path c:\powershell\icon.ico)) {
+    # if not exist, run icon function
+    Generate-Icon
+}
+ 
+# RUN MAIN FUNCTION
+Kill-Session
+ 
+
+Scheduled Task
+
+Code I used to create the scheduled task
+
+$action = New-ScheduledTaskAction -Execute 'mshta.exe' -Argument 'vbscript:Execute("CreateObject(""Wscript.Shell"").Run ""powershell.exe -ExecutionPolicy Bypass -NoLogo -Command """"& C:\powershell\Kill-Session.ps1"""""", 0 : window.close")'
+$trigger =  New-ScheduledTaskTrigger -Daily -At 11pm
+$idle = New-ScheduledTaskSettingsSet -RunOnlyIfIdle -IdleDuration 01:00:00 -IdleWaitTimeout 0
+ 
+Register-ScheduledTask -Action $action -Settings $idle -Trigger $trigger -TaskName "Kill-Session" -Description "Log out of AWS Session"
+ 
+
+ 
+
+Notes
+
+
+if (Get-Process logonui -ComputerName $env:computername -ErrorAction SilentlyContinue)
+    {
+         Write-Host "machine is locked"
+    }
+Else
+    {
+         Write-Host "machine is not locked"
+    }
