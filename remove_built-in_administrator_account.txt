@@ -1,0 +1,85 @@
+To delete the built-in Administrator account, this is the process:
+
+#1 Take ownership HKEY_LOCAL_MACHINE\SAM\SAM
+
+#2 Grant reg rights HKEY_LOCAL_MACHINE\SAM\SAM
+
+#3 Delete
+HKEY_LOCAL_MACHINE\SAM\SAM\Builtin\Account\Users\Names\Administrator
+
+#4 Remove user account from Local Users and Groups
+ 
+
+
+function Take-RegistryOwner {    
+ 
+    param($rootKey, $key, [System.Security.Principal.SecurityIdentifier]$sid = 'S-1-5-32-545', $recurse = $true)
+ 
+    switch -regex ($rootKey) {
+        'HKCU|HKEY_CURRENT_USER'    { $rootKey = 'CurrentUser' }
+        'HKLM|HKEY_LOCAL_MACHINE'   { $rootKey = 'LocalMachine' }
+        'HKCR|HKEY_CLASSES_ROOT'    { $rootKey = 'ClassesRoot' }
+        'HKCC|HKEY_CURRENT_CONFIG'  { $rootKey = 'CurrentConfig' }
+        'HKU|HKEY_USERS'            { $rootKey = 'Users' }
+    }
+ 
+    $import = '[DllImport("ntdll.dll")] public static extern int RtlAdjustPrivilege(ulong a, bool b, bool c, ref bool d);'
+    $ntdll = Add-Type -Member $import -Name NtDll -PassThru
+    $privileges = @{ SeTakeOwnership = 9; SeBackup =  17; SeRestore = 18 }
+    foreach ($i in $privileges.Values) {
+        $null = $ntdll::RtlAdjustPrivilege($i, 1, 0, [ref]0)
+    }
+ 
+    function Take-RegistryOwner {
+        param($rootKey, $key, $sid, $recurse, $recurseLevel = 0)
+ 
+        $regKey = [Microsoft.Win32.Registry]::$rootKey.OpenSubKey($key, 'ReadWriteSubTree', 'TakeOwnership')
+        $acl = New-Object System.Security.AccessControl.RegistrySecurity
+        $acl.SetOwner($sid)
+        $regKey.SetAccessControl($acl)
+ 
+        $acl.SetAccessRuleProtection($false, $false)
+        $regKey.SetAccessControl($acl)
+ 
+        if ($recurseLevel -eq 0) {
+            $regKey = $regKey.OpenSubKey('', 'ReadWriteSubTree', 'ChangePermissions')
+            $rule = New-Object System.Security.AccessControl.RegistryAccessRule($sid, 'FullControl', 'ContainerInherit', 'None', 'Allow')
+            $acl.ResetAccessRule($rule)
+            $regKey.SetAccessControl($acl)
+        }
+ 
+        if ($recurse) {
+            foreach($subKey in $regKey.OpenSubKey('').GetSubKeyNames()) {
+                Take-RegistryOwner $rootKey ($key+'\'+$subKey) $sid $recurse ($recurseLevel+1)
+            }
+        }
+    }
+ 
+    Take-RegistryOwner $rootKey $key $sid $recurse
+}
+ 
+Take-RegistryOwner "HKLM" "SAM"
+ 
+$key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("SAM",[Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,[System.Security.AccessControl.RegistryRights]::ChangePermissions)
+$acl = $key.GetAccessControl()
+$rule = New-Object System.Security.AccessControl.RegistryAccessRule ("Administrator","FullControl","Allow")
+$acl.SetAccessRule($rule)
+$key.SetAccessControl($acl)
+ 
+$idRef = [System.Security.Principal.NTAccount]("Administrator")
+$regRights = [System.Security.AccessControl.RegistryRights]::FullControl
+$inhFlags = [System.Security.AccessControl.InheritanceFlags]::None
+$prFlags = [System.Security.AccessControl.PropagationFlags]::None
+$acType = [System.Security.AccessControl.AccessControlType]::Allow
+$rule = New-Object System.Security.AccessControl.RegistryAccessRule ($idRef, $regRights, $inhFlags, $prFlags, $acType)
+$acl.AddAccessRule($rule)
+$acl | Set-Acl -Path 'HKLM:\SAM'
+ 
+#(Get-Acl 'HKLM:\SAM\SAM').Access
+ 
+Remove-Item -Path "HKLM:\SAM\SAM\Domains\Builtin\Users\Names\Administrator"
+ 
+$Computer = $env:computername
+$OU = [ADSI]"WinNT://$Computer"
+$OU.Delete("User","Administrator")
+Remove-LocalUser -Name "Administrator"
