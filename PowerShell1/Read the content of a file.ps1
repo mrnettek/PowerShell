@@ -1,0 +1,2 @@
+Get-Content TestFile.txt
+
